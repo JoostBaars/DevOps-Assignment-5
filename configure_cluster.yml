@@ -1,0 +1,71 @@
+--- 
+- 
+  become: true
+  gather_facts: false
+  hosts: cluster
+  tasks: 
+    - 
+      get_url: 
+        dest: /etc/yum.repos.d/kubernetes.repo
+        url: "https://gitlab-fnwi.uva.nl/skoulou1/devops-material/-/raw/main/ansible/kubernetes.repo"
+    - 
+      ansible.builtin.package: 
+        name: 
+          - docker 
+        state: present
+        disable_gpg_check: true
+    - 
+      ansible.builtin.systemd: 
+        name: docker
+        state: started
+    - 
+      ansible.builtin.command: "docker run hello-world"
+      register: docker_output
+- 
+  hosts: master
+  tasks: 
+    #- ansible.builtin.shell: "sudo docker swarm leave --force"    
+    - 
+      changed_when: false
+      delay: 10
+      register: public_ip
+      retries: 6
+      until: "public_ip.status == 200"
+      uri: 
+        method: Get
+        url: "https://api.ipify.org?format=json"
+    - 
+      debug: 
+        msg: "docker swarm init --advertise-addr {{ public_ip.json.ip }} | grep 'docker swarm join --token'"
+    - 
+      ansible.builtin.shell: "docker swarm init --advertise-addr {{ public_ip.json.ip }} | grep 'docker swarm join --token'"
+      become: true
+      register: join_cmd
+    - name: "Add join cmd to dummy host"
+      add_host:
+        name: "join_cmd_holder"
+        cmd: "{{ join_cmd.stdout}}"
+    #  local_action: copy content="{{join_cmd.stdout_lines}}" dest=~/join_cmd.txt
+    
+    #- ansible.builtin.shell: "scp -i labuser.pem ~/join_cmd.txt ec2-18-209-209-12.compute-1.amazonaws.com:/home/ec2-user"
+    
+- 
+  hosts: worker
+  tasks: 
+    - name: "print join cmd"
+      debug: 
+        msg: "[Worker] {{ hostvars['join_cmd_holder']['cmd'] }}"
+    - name: "Join"
+      ansible.builtin.shell: sudo {{ hostvars['join_cmd_holder']['cmd'] }}
+- 
+  hosts: master
+  tasks: 
+    - 
+      command: "sudo docker node ls"
+      name: "get nodes"
+      register: nodes_out
+    - 
+      debug: 
+        var: nodes_out
+      name: "print nodes"
+
